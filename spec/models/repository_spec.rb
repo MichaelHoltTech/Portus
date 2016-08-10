@@ -75,6 +75,10 @@ describe Repository do
     let(:registry) { create(:registry, hostname: "registry.test.lan") }
     let(:user) { create(:user) }
 
+    before :each do
+      VCR.turn_on!
+    end
+
     context "adding an existing repo/tag" do
       it "does not add a new activity when an already existing repo/tag already existed" do
         event = { "actor" => { "name" => user.username } }
@@ -88,6 +92,16 @@ describe Repository do
         expect do
           Repository.add_repo(event, registry.global_namespace, repository_name, tag_name)
         end.to change(PublicActivity::Activity, :count).by(0)
+      end
+
+      it "updates the digest of an already existing tag" do
+        event = { "actor" => { "name" => user.username }, "target" => { "digest" => "foo" } }
+        Repository.add_repo(event, registry.global_namespace, repository_name, tag_name)
+        expect(Repository.find_by(name: repository_name).tags.first.digest).to eq("foo")
+
+        event["target"]["digest"] = "bar"
+        Repository.add_repo(event, registry.global_namespace, repository_name, tag_name)
+        expect(Repository.find_by(name: repository_name).tags.first.digest).to eq("bar")
       end
     end
 
@@ -405,7 +419,7 @@ describe Repository do
     let!(:namespace)   { create(:namespace, team: team) }
     let!(:repo1)       { create(:repository, name: "repo1", namespace: namespace) }
     let!(:repo2)       { create(:repository, name: "repo2", namespace: namespace) }
-    let!(:tag1)        { create(:tag, name: "tag1", repository: repo1) }
+    let!(:tag1)        { create(:tag, name: "tag1", repository: repo1, digest: "foo") }
     let!(:tag2)        { create(:tag, name: "tag2", repository: repo2) }
     let!(:tag3)        { create(:tag, name: "tag3", repository: repo2) }
 
@@ -418,7 +432,7 @@ describe Repository do
         if args.first != "busybox" && !args.first.include?("/")
           raise "Should be included inside of a namespace"
         end
-        if args.last != "latest" && args.last != "0.1"
+        if args.last != "latest" && args.last != "0.1" && args.last != "tag1"
           raise "Using an unknown tag"
         end
 
@@ -429,6 +443,12 @@ describe Repository do
     end
 
     it "adds and deletes tags accordingly" do
+      # Update existing tag's digest
+      repo = { "name" => "#{namespace.name}/repo1", "tags" => ["tag1"] }
+      repo = Repository.create_or_update!(repo)
+      expect(repo.id).to eq repo1.id
+      expect(repo.tags.find_by(name: "tag1").digest).to match("digest")
+
       # Removes the existing tag and adds two.
       repo = { "name" => "#{namespace.name}/repo1", "tags" => ["latest", "0.1"] }
       repo = Repository.create_or_update!(repo)
